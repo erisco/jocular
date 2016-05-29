@@ -1,10 +1,10 @@
 {
-  "name": "Jocular",
+  "name": "jocular",
   "version": "0.0.0",
   "description": "Jocular",
   "main": "app.js",
   "author": {
-    "name": "erisco",
-    "email": ""
+    "name": "Eric Brisco",
+    "email": "eric.brisco@gmail.com"
   }
 }

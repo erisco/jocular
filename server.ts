@@ -1,15 +1,17 @@
 ﻿import http = require('http');
 import url = require('url');
-import { Jocular } from './Jocular';
+import { jocular } from './Jocular';
 
-import Service = Jocular.Service;
-import HttpRequest = Jocular.HttpRequest;
-import HttpResponse = Jocular.HttpResponse;
-import Maybe = Jocular.Maybe;
-import Route = Jocular.Route;
-import RouteTable = Jocular.RouteTable;
-import Kleisli = Jocular.Kleisli;
-import HttpError = Jocular.HttpError;
+import Service = jocular.Service;
+import HttpRequest = jocular.HttpRequest;
+import HttpResponse = jocular.HttpResponse;
+import Maybe = jocular.Maybe;
+import nothing = jocular.nothing;
+import just = jocular.just;
+import route = jocular.route;
+import RouteTable = jocular.RouteTable;
+import kleisli = jocular.kleisli;
+import getRequest = jocular.getRequest;
 
 
 
@@ -18,11 +20,11 @@ import HttpError = Jocular.HttpError;
 ///////////////////////////////////////////////////////////////////////////////
 
 var port = process.env.port || 1337
-http.createServer((req, res) => {
-  Service.Output(
+http.createServer((req: http.ServerRequest, res: http.ServerResponse) => {
+  Service.output(
     res,
-    Route(MyRouteTable, HttpRequest.Input(req)),
-    new Environment(Maybe.Nothing<User>())
+    route(myRouteTable, HttpRequest.input(req)),
+    new Environment(nothing<User>())
   );
 }).listen(port);
 
@@ -32,9 +34,9 @@ http.createServer((req, res) => {
 // Routes
 ///////////////////////////////////////////////////////////////////////////////
 
-const MyRouteTable: RouteTable<Environment> = [
-  ["/index.html", IndexPage],
-  ["/secret.html", Kleisli(SecretPage, Auth)]
+const myRouteTable: RouteTable<Environment> = [
+  ["/index.html", indexPage],
+  ["/secret.html", kleisli(secretPage, auth)]
 ];
 
 
@@ -43,10 +45,10 @@ const MyRouteTable: RouteTable<Environment> = [
 // Index controller
 ///////////////////////////////////////////////////////////////////////////////
 
-function IndexPage(
+function indexPage(
   req: HttpRequest
-): Service<Environment, HttpError, HttpResponse> {
-  return Service.Return(new HttpResponse(200, "Hello world!"));
+): Service<Environment, HttpResponse, HttpResponse> {
+  return Service.return(new HttpResponse(200, "Hello world!"));
 }
 
 
@@ -55,17 +57,17 @@ function IndexPage(
 // Auth policy
 ///////////////////////////////////////////////////////////////////////////////
 
-function Auth(
+function auth(
   req: HttpRequest
-): Service<Environment, HttpError, HttpRequest> {
-  let { email, password } = req.Query;
+): Service<Environment, HttpResponse, HttpRequest> {
+  let { email, password } = req.query;
   if (password === "test") {
-    return Service.WriteState(
-      new Environment(Maybe.Just(new User(email)))
-    ).Map(_ => req);
+    return Service.writeState(
+      new Environment(just(new User(email)))
+    ).map(_ => req);
   }
   else {
-    return Service.Error(new HttpError(401, 0, "Unauthorized"));
+    return Service.error(new HttpResponse(401, "Unauthorized"));
   }
 }
 
@@ -75,13 +77,21 @@ function Auth(
 // Secret controller
 ///////////////////////////////////////////////////////////////////////////////
 
-function SecretPage(
+function secretPage(
   req: HttpRequest
-): Service<Environment, HttpError, HttpResponse> {
-  return Service.ReadState<Environment, HttpError>()
-    .Bind(s => s.AuthUser)
-    .Map(user =>
-      new HttpResponse(200, `Hello ${user.Email}, you found the secret!`)
+): Service<Environment, HttpResponse, HttpResponse> {
+  return Service.readState<Environment, HttpResponse>()
+    .bind(s => s.AuthUser)
+    .bind(user =>
+      Service.promise(
+        getRequest("http://www.example.com")
+        .then(txt =>
+          new HttpResponse(
+            200,
+            `Hello ${user.email}, you found the secret!\n\n${txt}`
+          )
+        )
+      )
     );
 }
 
@@ -95,17 +105,17 @@ class Environment {
 
   // Database handle, configuration, etc
 
-  private _AuthUser: Maybe<User>;
+  private _authUser: Maybe<User>;
 
-  public get AuthUser(): Service<Environment, HttpError, User> {
-    return this._AuthUser.Cases(
-      () => Service.Error(new HttpError(401, 0, "Unauthorized")),
-      u => Service.Return(u)
+  public get AuthUser(): Service<Environment, HttpResponse, User> {
+    return this._authUser.cases(
+      () => Service.error(new HttpResponse(401, "Unauthorized")),
+      u => Service.return(u)
     );
   }
 
   public constructor(authUser: Maybe<User>) {
-    this._AuthUser = authUser;
+    this._authUser = authUser;
   }
 
 }
@@ -118,14 +128,14 @@ class Environment {
 
 class User {
 
-  private _Email: string;
+  private _email: string;
 
-  public get Email(): string {
-    return this._Email;
+  public get email(): string {
+    return this._email;
   }
 
   public constructor(email: string) {
-    this._Email = email;
+    this._email = email;
   }
 
 }

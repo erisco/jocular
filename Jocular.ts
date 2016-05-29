@@ -3,7 +3,7 @@ import url = require('url');
 
 
 
-export namespace Jocular {
+export namespace jocular {
 
 
 
@@ -16,140 +16,97 @@ export namespace Jocular {
 
 
   /////////////////////////////////////////////////////////////////////////////
-  // Either
-  /////////////////////////////////////////////////////////////////////////////
-
-  enum EitherTag {
-    Left,
-    Right
-  }
-
-  export class Either<A, B> {
-
-    private static _Key: number = Math.random();
-
-    private _Tag: EitherTag;
-
-    private _Term: any;
-
-    public constructor(key: number, tag: EitherTag, term: any) {
-      if (key != Either._Key) {
-        throw "not allowed to call this constructor";
-      }
-      this._Tag = tag;
-      this._Term = term;
-    }
-
-    public Cases<C>(caseLeft: (a: A) => C, caseRight: (a: B) => C): C {
-      switch (this._Tag) {
-        case EitherTag.Left:
-          return caseLeft(this._Term);
-        case EitherTag.Right:
-          return caseRight(this._Term);
-        default:
-          throw "missing case";
-      }
-    }
-
-    public static Left<A, B>(x: A): Either<A, B> {
-      return new Either(Either._Key, EitherTag.Left, x);
-    }
-
-    public static Right<A, B>(x: B): Either<A, B> {
-      return new Either(Either._Key, EitherTag.Right, x);
-    }
-
-  }
-
-
-
-  /////////////////////////////////////////////////////////////////////////////
   // Service
   /////////////////////////////////////////////////////////////////////////////
 
   export class Service<TState, TError, A> {
 
-    private _Step: (a: TState) => Either<TError, [TState, A]>;
+    private _step: (a: TState) => Promise<TError, [TState, A]>;
 
-    public constructor(step: (a: TState) => Either<TError, [TState, A]>) {
-      this._Step = step;
+    public constructor(step: (a: TState) => Promise<TError, [TState, A]>) {
+      this._step = step;
     }
 
-    public Bind<B>(
+    public bind<B>(
       f: (a: A) => Service<TState, TError, B>
     ): Service<TState, TError, B> {
       return new Service(
         (s1: TState) =>
-          this._Step(s1).Cases(Either.Left, ([s2, a]) => f(a)._Step(s2))
+          this._step(s1).then(([s2, a]) => f(a)._step(s2))
       );
     }
-
-    public Recover(
+    
+    public recover(
       f: (e: TError) => Service<TState, TError, A>
     ): Service<TState, TError, A> {
       return new Service(
         (s1: TState) =>
-          this._Step(s1).Cases(error => f(error)._Step(s1), Either.Right)
+          this._step(s1).catch(error => f(error)._step(s1))
       );
     }
 
-    public MapError<TError2>(
+    public mapError<TError2>(
       f: (e: TError) => TError2
     ): Service<TState, TError2, A> {
       return new Service(
         (s1: TState) =>
-          this._Step(s1).Cases(error => Either.Left(f(error)), Either.Right)
+          this._step(s1).catch(error => Promise.reject(f(error)))
       );
     }
 
-    public Map<B>(f: (a: A) => B): Service<TState, TError, B> {
-      return this.Bind(a => Service.Return(f(a)));
+    public map<B>(f: (a: A) => B): Service<TState, TError, B> {
+      return this.bind(a => Service.return(f(a)));
     }
 
-    public ReadState(): Service<TState, TError, TState> {
-      return this.Bind(_ => Service.ReadState());
+    public readState(): Service<TState, TError, TState> {
+      return this.bind(_ => Service.readState());
     }
 
-    public WriteState(x: TState): Service<TState, TError, A> {
-      return this.Bind(a => Service.WriteState(x)
-        .Bind(_ => Service.Return(a)));
+    public writeState(x: TState): Service<TState, TError, A> {
+      return this.bind(a => Service.writeState(x)
+        .bind(_ => Service.return(a)));
     }
 
-    public static Return<TState, TError, A>(x: A): Service<TState, TError, A> {
-      return new Service(s => Either.Right([s, x]));
+    public static return<TState, TError, A>(x: A): Service<TState, TError, A> {
+      return new Service(s => Promise.resolve([s, x]));
     }
 
-    public static Error<TState, TError, A>(
+    public static promise<TState, TError, A>(
+      x: Promise<TError, A>
+    ): Service<TState, TError, A> {
+      return new Service(s => x.then(a => [s, a]));
+    }
+
+    public static error<TState, TError, A>(
       error: TError
     ): Service<TState, TError, A> {
-      return new Service(s => Either.Left(error));
+      return new Service(s => Promise.reject(error));
     }
 
-    public static ReadState<TState, TError>(
+    public static readState<TState, TError>(
     ): Service<TState, TError, TState> {
-      return new Service(s => Either.Right([s, s]));
+      return new Service(s => Promise.resolve([s, s]));
     }
 
-    public static WriteState<TState, TError, Unit>(
+    public static writeState<TState, TError, Unit>(
       x: TState
     ): Service<TState, TError, Unit> {
-      return new Service(_ => Either.Right([x, new Unit()]));
+      return new Service(_ => Promise.resolve([x, new Unit()]));
     }
 
-    public static Output<TState>(
+    public static output<TState>(
       res: http.ServerResponse,
-      service: Service<TState, HttpError, HttpResponse>,
+      service: Service<TState, HttpResponse, HttpResponse>,
       state: TState
     ): void {
-      service._Step(state).Cases(
-        error => {
-          res.statusCode = error.Status;
-          res.setHeader("Content-Type", "text/plain");
-          res.end(`[${error.Code}] ${error.Message}`);
-        },
+      service._step(state).then(
         ([_, r]) => {
-          res.statusCode = r.Status;
-          res.end(r.Body);
+          res.statusCode = r.status;
+          res.end(r.body);
+        },
+        r => {
+          res.statusCode = r.status;
+          res.end(r.body);
         }
       );
     }
@@ -157,47 +114,11 @@ export namespace Jocular {
   }
 
   // No polymorphic HKTs in TypeScript, so we have to specialise to Service.
-  export function Kleisli<TState, TError, A, B, C>(
+  export function kleisli<TState, TError, A, B, C>(
     g: (b: B) => Service<TState, TError, C>,
     f: (a: A) => Service<TState, TError, B>
   ): (a: A) => Service<TState, TError, C> {
-    return (a: A) => f(a).Bind(g);
-  }
-
-
-
-  /////////////////////////////////////////////////////////////////////////////
-  // HttpError
-  /////////////////////////////////////////////////////////////////////////////
-
-  export class HttpError {
-
-    private _Status: number;
-
-    private _Code: number;
-
-    private _Message: string;
-
-    private _Cause: any;
-
-    public get Status(): number {
-      return this._Status;
-    }
-
-    public get Code(): number {
-      return this._Code;
-    }
-
-    public get Message(): string {
-      return this._Message;
-    }
-
-    constructor(status: number, code: number, message: string) {
-      this._Status = status;
-      this._Code = code;
-      this._Message = message;
-    }
-
+    return (a: A) => f(a).bind(g);
   }
 
 
@@ -210,24 +131,24 @@ export namespace Jocular {
 
   export class HttpRequest {
 
-    private _Path: string;
+    private _path: string;
 
-    private _Query: Query
+    private _query: Query
 
-    public get Path(): string {
-      return this._Path;
+    public get path(): string {
+      return this._path;
     }
 
-    public get Query(): Query {
-      return this._Query;
+    public get query(): Query {
+      return this._query;
     }
 
     constructor(path: string, query: Query) {
-      this._Path = path;
-      this._Query = query;
+      this._path = path;
+      this._query = query;
     }
 
-    public static Input(req: http.ServerRequest): HttpRequest {
+    public static input(req: http.ServerRequest): HttpRequest {
       let { pathname, query } = url.parse(req.url, true);
       return new HttpRequest(pathname, query);
     }
@@ -242,21 +163,21 @@ export namespace Jocular {
 
   export class HttpResponse {
 
-    private _Status: number;
+    private _status: number;
 
-    private _Body: string;
+    private _body: string;
 
-    public get Status(): number {
-      return this._Status;
+    public get status(): number {
+      return this._status;
     }
 
-    public get Body(): string {
-      return this._Body;
+    public get body(): string {
+      return this._body;
     }
 
     constructor(status: number, body: string) {
-      this._Status = status;
-      this._Body = body;
+      this._status = status;
+      this._body = body;
     }
 
   }
@@ -270,18 +191,40 @@ export namespace Jocular {
   export type RouteTable<TState> = [string, Controller<TState>][];
 
   export type Controller<TState> =
-    (req: HttpRequest) => Service<TState, HttpError, HttpResponse>;
+    (req: HttpRequest) => Service<TState, HttpResponse, HttpResponse>;
 
-  export function Route<TState>(
+  export function route<TState>(
     table: RouteTable<TState>,
     req: HttpRequest
-  ): Service<TState, HttpError, HttpResponse> {
+  ): Service<TState, HttpResponse, HttpResponse> {
     for (let row of table) {
-      if (row[0] == req.Path) {
+      if (row[0] == req.path) {
         return row[1](req);
       }
     }
-    return Service.Return(new HttpResponse(404, ""));
+    return Service.return(new HttpResponse(404, ""));
+  }
+
+
+
+  /////////////////////////////////////////////////////////////////////////////
+  // HTTP reqests
+  /////////////////////////////////////////////////////////////////////////////
+
+  export function getRequest(
+    url: string
+  ): Promise<{ message: string }, string> {
+    let content = "";
+    return new Promise(
+      (resolve, reject) =>
+        http.get(
+          url,
+          resp =>
+            resp.on('data', (chunk: Buffer) => content += chunk)
+              .on('end', () => resolve(content))
+        )
+          .on('error', reject)
+    );
   }
 
 
@@ -290,49 +233,95 @@ export namespace Jocular {
   // Maybe
   /////////////////////////////////////////////////////////////////////////////
 
+  export interface Maybe<A> {
+    cases<B>(caseNothing: () => B, caseJust: (x: A) => B): B;
+  }
+
+  export function nothing<A>(): Maybe<A> {
+    return new MaybeImpl(MaybeTag.Nothing, undefined);
+  }
+
+  export function just<A>(x: A): Maybe<A> {
+    return new MaybeImpl(MaybeTag.Just, x);
+  }
+
   enum MaybeTag {
     Nothing,
     Just
   }
 
-  export class Maybe<A> {
+  class MaybeImpl<A> implements Maybe<A> {
 
-    private static _Key: Number = Math.random();
+    private _tag: MaybeTag;
 
-    private _Tag: MaybeTag;
+    private _value: A;
 
-    private _Value: A;
-
-    public constructor(key: Number, tag: MaybeTag, value: A) {
-      if (key !== Maybe._Key) {
-        throw "cannot call this constructor";
-      }
-      this._Tag = tag;
-      this._Value = value;
+    public constructor(tag: MaybeTag, value: A) {
+      this._tag = tag;
+      this._value = value;
     }
 
-    public Cases<C>(
+    public cases<C>(
       caseNothing: () => C,
       caseJust: (x: A) => C
-    ) {
-      switch (this._Tag) {
+    ): C {
+      switch (this._tag) {
         case MaybeTag.Just:
-          return caseJust(this._Value);
+          return caseJust(this._value);
         case MaybeTag.Nothing:
           return caseNothing();
         default:
           throw "missing case";
       }
     }
+    
+  }
 
-    public static Nothing<A>(): Maybe<A> {
-      return new Maybe(Maybe._Key, MaybeTag.Nothing, undefined);
+
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Either
+  /////////////////////////////////////////////////////////////////////////////
+
+  export interface Either<A, B> {
+    cases<C>(caseLeft: (a: A) => C, caseRight: (a: B) => C): C
+  }
+
+  export function left<A, B>(x: A): Either<A, B> {
+    return new EitherImpl(EitherTag.Left, x);
+  }
+
+  export function right<A, B>(x: B): Either<A, B> {
+    return new EitherImpl(EitherTag.Right, x);
+  }
+
+  enum EitherTag {
+    Left,
+    Right
+  }
+
+  export class EitherImpl<A, B> implements Either<A, B> {
+
+    private _tag: EitherTag;
+
+    private _term: any;
+
+    public constructor(tag: EitherTag, term: any) {
+      this._tag = tag;
+      this._term = term;
     }
 
-    public static Just<A>(x: A): Maybe<A> {
-      return new Maybe(Maybe._Key, MaybeTag.Just, x);
+    public cases<C>(caseLeft: (a: A) => C, caseRight: (a: B) => C): C {
+      switch (this._tag) {
+        case EitherTag.Left:
+          return caseLeft(this._term);
+        case EitherTag.Right:
+          return caseRight(this._term);
+        default:
+          throw "missing case";
+      }
     }
-
+    
   }
   
 }

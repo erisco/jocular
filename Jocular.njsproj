@@ -34,7 +34,8 @@
     <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
-    <TypeScriptCompile Include="Jocular.ts" />
+    <TypeScriptCompile Include="jocular.ts" />
+    <TypeScriptCompile Include="promise.d.ts" />
     <TypeScriptCompile Include="Scripts\typings\node\node.d.ts" />
     <TypeScriptCompile Include="server.ts" />
     <Content Include="package.json" />
