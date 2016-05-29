@@ -85,7 +85,8 @@ function secretPage(
     .bind(user =>
       Service.promise(
         getRequest("http://www.example.com")
-        .then(txt =>
+        .catch(e => Promise.reject(new HttpResponse(502, e.message)))
+        .then<void, HttpResponse>(txt =>
           new HttpResponse(
             200,
             `Hello ${user.email}, you found the secret!\n\n${txt}`
